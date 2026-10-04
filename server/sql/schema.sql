@@ -93,3 +93,72 @@ CREATE TABLE IF NOT EXISTS migration_plan_items (
   evidence        JSONB NOT NULL DEFAULT '{}'::jsonb,
   UNIQUE (plan_id, mapping_id)
 );
+
+-- ---------------------------------------------------------------------------
+-- 观察包接入与覆盖审阅
+-- ---------------------------------------------------------------------------
+
+-- 映射/规则版本：生效映射集或规范化规则任一变化即产生新版本（懒式创建）。
+-- 历史覆盖报告绑定导出时的版本行；快照保存当时的规则原文与映射集，供复盘。
+CREATE TABLE IF NOT EXISTS mapping_versions (
+  id                BIGSERIAL PRIMARY KEY,
+  rules_fingerprint TEXT NOT NULL,           -- 规范化规则指纹（尾斜杠模式、追踪参数集…）
+  mapping_digest    TEXT NOT NULL,           -- 生效映射集摘要
+  rules_snapshot    JSONB NOT NULL,          -- 规则原文（复盘用）
+  mapping_snapshot  JSONB NOT NULL,          -- 生效映射快照（复盘用）
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (rules_fingerprint, mapping_digest)
+);
+
+-- 运营观察包（脱敏本地访问记录），整包幂等：
+-- 同 batch_key + 同内容摘要的重传是 no-op；同键不同摘要拒绝（409），不静默覆盖。
+CREATE TABLE IF NOT EXISTS observation_batches (
+  id                 BIGSERIAL PRIMARY KEY,
+  batch_key          TEXT NOT NULL UNIQUE,   -- 提供方给的稳定批次标识
+  source_label       TEXT,                   -- 提供方/说明
+  batch_digest       TEXT NOT NULL,          -- 整包内容摘要（由记录摘要聚合）
+  record_count       INT  NOT NULL,
+  mapping_version_id BIGINT REFERENCES mapping_versions(id), -- 导入时的映射版本
+  raw_payload        JSONB NOT NULL,         -- 原始包全文（证据）
+  received_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 观察事件：稳定事件标识全局唯一 —— 重复/迟到记录按 event_id 幂等，
+-- 同一事件重传不会把访问次数翻倍；迟到记录按自身 window 归入正确时间段。
+CREATE TABLE IF NOT EXISTS observation_events (
+  id                BIGSERIAL PRIMARY KEY,
+  batch_id          BIGINT NOT NULL REFERENCES observation_batches(id) ON DELETE CASCADE,
+  event_id          TEXT NOT NULL UNIQUE,    -- 稳定事件标识
+  url_raw           TEXT NOT NULL,           -- 原始 URL：原样保留路径/百分号编码/追踪参数值
+  window_start      TIMESTAMPTZ,             -- 观察时间范围（结构非法的记录允许为空并被隔离）
+  window_end        TIMESTAMPTZ,
+  hits              INT  CHECK (hits >= 0),  -- 观察次数
+  content_digest    TEXT NOT NULL,           -- 记录内容摘要
+  norm_key          TEXT,                    -- 导入时按当时规则计算的查表键（留证；
+                                             --   覆盖计算在查询时按当前规则重算）
+  pathname_raw      TEXT,                    -- 原始路径（百分号编码原样，不 decode）
+  query_raw         TEXT,                    -- 原始查询串（含全部追踪参数值）
+  tracker_params    JSONB NOT NULL DEFAULT '{}'::jsonb, -- 追踪参数名→值（证据）
+  status            TEXT NOT NULL DEFAULT 'observed'
+                    CHECK (status IN ('observed','quarantined')),
+  -- 外网/非白名单 origin、URL 格式错误、记录结构非法 → quarantined：
+  -- 只标记为不可验证，绝不对其发起任何请求
+  quarantine_reason TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_observation_events_norm   ON observation_events(norm_key);
+CREATE INDEX IF NOT EXISTS idx_observation_events_window ON observation_events(window_start);
+CREATE INDEX IF NOT EXISTS idx_observation_events_status ON observation_events(status);
+
+-- 覆盖报告：导出即快照，绑定映射版本。
+-- 迟到记录只影响实时覆盖与后续导出，绝不回写已导出的历史版本报告。
+CREATE TABLE IF NOT EXISTS coverage_reports (
+  id                 BIGSERIAL PRIMARY KEY,
+  title              TEXT,
+  mapping_version_id BIGINT NOT NULL REFERENCES mapping_versions(id),
+  summary            JSONB NOT NULL,         -- 汇总（各状态键数/命中数）
+  items              JSONB NOT NULL,         -- 覆盖项快照（含原始 URL 证据）
+  quarantined        JSONB NOT NULL,         -- 隔离项快照（含原因）
+  timeline           JSONB NOT NULL DEFAULT '[]'::jsonb, -- 时间段快照（迟到记录不回写）
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);

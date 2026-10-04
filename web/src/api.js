@@ -37,4 +37,26 @@ export const api = {
     fetch(`/api/plans/${id}/publish`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
     }).then(j),
+  // ---- 观察包接入与覆盖审阅 ----
+  obsSample: (late = false) =>
+    fetch(`/api/observations/sample${late ? '?late=1' : ''}`).then(j),
+  importObservations: (pkg) =>
+    fetch('/api/observations/import', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(pkg),
+    }).then(j),
+  obsBatches: () => fetch('/api/observations/batches').then(j),
+  obsEvents: (status = null) =>
+    fetch(`/api/observations/events${status ? `?status=${status}` : ''}`).then(j),
+  coverage: () => fetch('/api/coverage').then(j),
+  coverageSummary: () => fetch('/api/coverage/summary').then(j),
+  exportCoverage: (title) =>
+    fetch('/api/coverage/reports', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title }),
+    }).then(j),
+  coverageReports: () => fetch('/api/coverage/reports').then(j),
+  coverageReport: (id) => fetch(`/api/coverage/reports/${id}`).then(j),
+  coverageDiff: (id) => fetch(`/api/coverage/reports/${id}/diff`).then(j),
+  versions: () => fetch('/api/versions').then(j),
 };

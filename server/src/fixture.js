@@ -26,6 +26,7 @@ export function buildFixtureApp() {
     '/sections/weekly',
     '/files%2Fdraft',
     '/chain/7',
+    '/articles/legacy/unknown-page',
   ]);
   const pageTitles = {
     '/articles/tech/42': '科技频道文章 42',
@@ -33,6 +34,7 @@ export function buildFixtureApp() {
     '/sections/weekly': '周刊栏目',
     '/files%2Fdraft': '文件名中带斜杠字符的草稿页（编码斜杠是合法文件名）',
     '/chain/7': '长链终点页',
+    '/articles/legacy/unknown-page': '遗留页补迁目标（观察包场景）',
   };
 
   /**
@@ -45,6 +47,9 @@ export function buildFixtureApp() {
     ['/news/123', '/articles/123'],
     ['/column/weekly/', '/sections/weekly'],
     ['/old-files%2Fdraft', '/files%2Fdraft'],
+    // 观察包场景：运营观察到 /legacy/unknown-page 仍在被访问，
+    // 补录映射后验证可覆盖（演示“未覆盖 → 新增覆盖”）
+    ['/legacy/unknown-page', '/articles/legacy/unknown-page'],
     // 修复模式：长链改直跳、环打断；默认模式保留缺陷
     ...(fixed
       ? [

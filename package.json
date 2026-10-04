@@ -14,9 +14,10 @@
     "migrate": "node server/src/migrate.js",
     "seed": "node server/src/seed.js",
     "verify": "node server/src/verify-cli.js",
+    "obs:import": "node scripts/import-observations.js",
     "pg:start": "node scripts/start-pg.js",
     "pg:stop": "node scripts/start-pg.js stop",
-    "test": "node --test server/test/"
+    "test": "node --test --test-concurrency=1 server/test/"
   },
   "dependencies": {
     "@fastify/static": "^10.1.5",

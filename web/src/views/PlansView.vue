@@ -35,6 +35,17 @@
 
   <div class="panel" v-if="detail">
     <h2>方案 #{{ detail.plan.id }}：{{ detail.plan.name }}（{{ statusText(detail.plan.status) }}）</h2>
+    <div v-if="uncoveredObserved.length" class="callout bad">
+      <b>覆盖风险提示：</b>
+      运营观察到 {{ uncoveredObserved.length }} 个被真实访问的旧址未纳入本方案的已验证覆盖
+      （共 {{ uncoveredObserved.reduce((s, i) => s + i.hits, 0) }} 次访问）：
+      <ul style="margin:6px 0 0; padding-left:18px">
+        <li v-for="i in uncoveredObserved" :key="i.norm_key" class="mono small">
+          {{ i.norm_key }} —— {{ { blocked: '验证阻断', unverified: '有映射未验证', unmapped: '无映射' }[i.status] || i.status }}，{{ i.hits }} 次
+        </li>
+      </ul>
+      发布前请在「覆盖审阅」页导出基线报告，避免上线后真实流量落空。
+    </div>
     <div v-if="lastPublish && !lastPublish.published">
       <div class="callout bad">
         <b>发布被拒绝，受影响链接：</b>
@@ -52,7 +63,7 @@
       ✅ 已发布。每条链接均有最终页面状态与逐跳证据。
     </div>
     <table>
-      <thead><tr><th>状态</th><th>旧址</th><th>计划目标（含保留的追踪参数）</th><th>裁决证据</th></tr></thead>
+      <thead><tr><th>状态</th><th>旧址</th><th>计划目标（含保留的追踪参数）</th><th>观察命中</th><th>裁决证据</th></tr></thead>
       <tbody>
         <tr v-for="it in detail.items" :key="it.id">
           <td>
@@ -62,6 +73,13 @@
           </td>
           <td class="mono">{{ it.source_raw }}</td>
           <td class="mono">{{ it.evidence?.proposed_redirect_url || '（已删除，返回 410/404）' }}</td>
+          <td class="small">
+            <template v-if="observedOf(it.source_norm)">
+              {{ observedOf(it.source_norm).hits }} 次
+              <span class="muted">（{{ observedOf(it.source_norm).event_count }} 事件）</span>
+            </template>
+            <span v-else class="muted">—</span>
+          </td>
           <td class="small">
             <div>最终状态：{{ it.evidence?.final_status ?? '—' }}；跳数：{{ it.evidence?.hops ?? '—' }}</div>
             <ul v-if="it.evidence?.issues?.length" class="issues">
@@ -75,7 +93,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { api } from '../api.js';
 const props = defineProps({ refreshKey: Number });
 
@@ -83,8 +101,24 @@ const plans = ref([]);
 const newName = ref('');
 const detail = ref(null);
 const lastPublish = ref(null);
+const coverage = ref(null);
 
-async function load() { plans.value = await api.plans(); if (detail.value) await open(detail.value.plan.id); }
+const observedByKey = computed(() => {
+  const m = new Map();
+  for (const i of coverage.value?.items ?? []) m.set(i.norm_key, i);
+  return m;
+});
+// 方案条目不覆盖的、被真实访问的旧址（风险提示）
+const uncoveredObserved = computed(() =>
+  (coverage.value?.items ?? []).filter((i) => i.status !== 'covered'));
+
+function observedOf(sourceNorm) { return observedByKey.value.get(sourceNorm); }
+
+async function load() {
+  plans.value = await api.plans();
+  coverage.value = await api.coverage().catch(() => null);
+  if (detail.value) await open(detail.value.plan.id);
+}
 async function create() {
   if (!newName.value.trim()) return;
   await api.createPlan(newName.value.trim());

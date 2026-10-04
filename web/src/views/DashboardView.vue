@@ -20,6 +20,16 @@
       <div class="card"><div class="num" style="color:var(--bad)">{{ counts.loop + counts.long + counts.badStatus + counts.fetch }}</div><div class="lbl">环/长链/最终页异常/越权</div></div>
       <div class="card"><div class="num">{{ counts.unverified }}</div><div class="lbl">从未验证（仅填表）</div></div>
     </div>
+
+    <div v-if="covSummary && (covSummary.uncovered_keys > 0 || covSummary.quarantined > 0)" class="callout bad" style="margin-top:12px">
+      <b>观察覆盖风险：</b>
+      运营观察包显示 <b>{{ covSummary.uncovered_keys }}</b> 个被真实访问的旧址尚未被当前迁移覆盖
+      （共 {{ covSummary.uncovered_hits }} 次访问，映射版本 v{{ covSummary.version_id }}）；
+      <template v-if="covSummary.quarantined">
+        另有 {{ covSummary.quarantined }} 条记录因外网/格式错误被隔离（不可验证，未发起请求）。
+      </template>
+      请到「覆盖审阅」页核对未覆盖清单与证据。
+    </div>
   </div>
 
   <div class="panel">
@@ -85,6 +95,7 @@ const label = ref({});
 const running = ref(false);
 const hops = ref([]);
 const hopsKey = ref('');
+const covSummary = ref(null);
 
 const counts = computed(() => {
   const c = { ok: 0, ambiguity: 0, loop: 0, long: 0, badStatus: 0, fetch: 0, unverified: 0 };
@@ -109,6 +120,8 @@ async function load() {
     if (!byKey.has(i.source_norm)) byKey.set(i.source_norm, i);
   }
   rows.value = [...byKey.values()];
+  // 观察覆盖风险（无观察包时静默为 null）
+  covSummary.value = await api.coverageSummary().catch(() => null);
 }
 async function runAll() {
   running.value = true;

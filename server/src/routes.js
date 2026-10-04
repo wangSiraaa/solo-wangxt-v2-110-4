@@ -1,9 +1,14 @@
-/** REST API：映射录入、规范化试算、验证、迁移方案与发布闸门。 */
+/** REST API：映射录入、规范化试算、验证、迁移方案与发布闸门、观察包接入与覆盖审阅。 */
 import { pool } from './db.js';
 import { normalize, carryTrackers, splitQuery } from './normalize.js';
 import { recomputeMappings } from './mappings-service.js';
 import { runVerification, VERDICT_LABEL } from './verify-runner.js';
 import { config } from './config.js';
+import {
+  importPackage, listBatches, listEvents, liveCoverage, exportReport,
+  listReports, getReport, diffWithCurrent, listVersions, reportToCsv,
+} from './observation-service.js';
+import { buildSamplePackage, buildLatePackage } from './observation-sample.js';
 
 export default async function api(app) {
   app.get('/api/health', async () => ({ ok: true, fixture: `127.0.0.1:${config.fixture.port}` }));
@@ -227,4 +232,92 @@ export default async function api(app) {
         WHERE id=$1 RETURNING *`, [planId]);
     return { published: true, plan: rows[0] };
   });
+
+  // ---- 观察包接入与覆盖审阅 ----------------------------------------------
+  // 纪律：这些接口只读已落库的验证裁决，绝不发起任何网络请求；
+  // 外网/格式错误记录只隔离标记为不可验证。
+
+  // 演示包（便于 UI 一键导入与验收）：?late=1 返回迟到补传包
+  app.get('/api/observations/sample', async (req) =>
+    (req.query?.late ? buildLatePackage() : buildSamplePackage()));
+
+  // 导入观察包（幂等：批次摘要 + 事件标识）
+  app.post('/api/observations/import', async (req, reply) => {
+    try {
+      return await importPackage(req.body ?? {});
+    } catch (e) {
+      return reply.code(e.statusCode ?? 500).send({ error: e.message });
+    }
+  });
+
+  app.get('/api/observations/batches', async () => ({ batches: await listBatches() }));
+
+  // 原始记录追溯：每条事件的原始 URL/路径/追踪参数值/摘要/批次/隔离原因
+  app.get('/api/observations/events', async (req) => ({
+    events: await listEvents({
+      status: req.query?.status ?? null,
+      normKey: req.query?.norm_key ?? null,
+      limit: req.query?.limit ?? 500,
+    }),
+  }));
+
+  // 实时覆盖：按当前规范化规则 + 当前映射 + 当前验证裁决
+  app.get('/api/coverage', async () => liveCoverage());
+
+  // 轻量汇总（总览/方案页风险提示用）
+  app.get('/api/coverage/summary', async () => {
+    const cov = await liveCoverage();
+    const s = cov.summary;
+    return {
+      version_id: cov.version.id,
+      keys: s.keys,
+      hits: s.hits,
+      quarantined: s.quarantined,
+      by_status: s.by_status,
+      uncovered_keys: s.keys - s.by_status.covered.keys,
+      uncovered_hits: s.hits - s.by_status.covered.hits,
+    };
+  });
+
+  // 导出覆盖报告：快照绑定当前映射版本，之后不再被改写
+  app.post('/api/coverage/reports', async (req) => exportReport(req.body?.title ?? null));
+
+  app.get('/api/coverage/reports', async () => ({ reports: await listReports() }));
+
+  // 历史报告复盘：永远返回导出时绑定的版本快照
+  app.get('/api/coverage/reports/:id', async (req, reply) => {
+    try {
+      return await getReport(Number(req.params.id));
+    } catch (e) {
+      return reply.code(e.statusCode ?? 500).send({ error: e.message });
+    }
+  });
+
+  // 版本差异：历史报告（旧版本） vs 当前版本实时覆盖
+  app.get('/api/coverage/reports/:id/diff', async (req, reply) => {
+    try {
+      return await diffWithCurrent(Number(req.params.id));
+    } catch (e) {
+      return reply.code(e.statusCode ?? 500).send({ error: e.message });
+    }
+  });
+
+  // CSV 导出（报告快照内容，不重新计算）
+  app.get('/api/coverage/reports/:id/export', async (req, reply) => {
+    try {
+      const report = await getReport(Number(req.params.id));
+      if (req.query?.format === 'csv') {
+        return reply
+          .header('content-type', 'text/csv; charset=utf-8')
+          .header('content-disposition', `attachment; filename="coverage-report-${report.id}.csv"`)
+          .send(reportToCsv(report));
+      }
+      return report;
+    } catch (e) {
+      return reply.code(e.statusCode ?? 500).send({ error: e.message });
+    }
+  });
+
+  // 映射/规则版本历史（报告绑定关系可审计）
+  app.get('/api/versions', async () => ({ versions: await listVersions() }));
 }

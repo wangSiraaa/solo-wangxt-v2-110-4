@@ -6,17 +6,7 @@
 import { pool } from './db.js';
 import { normalize } from './normalize.js';
 import { judge } from './verifier.js';
-
-const VERDICT_LABEL = {
-  ok: '通过',
-  redirect_loop: '重定向环',
-  chain_too_long: '跳转链过长',
-  fetch_error: '请求被拒/失败',
-  deleted_gone_ok: '已删除-状态正确',
-  deleted_not_gone: '已删除但未消亡',
-  ambiguity: '归一化歧义',
-  final_status_bad: '最终页状态异常',
-};
+import { VERDICT_LABEL } from './verdict-labels.js';
 
 export async function runVerification({ onlyKey = null } = {}) {
   if (!onlyKey) {
