@@ -16,7 +16,7 @@
     "verify": "node server/src/verify-cli.js",
     "pg:start": "node scripts/start-pg.js",
     "pg:stop": "node scripts/start-pg.js stop",
-    "test": "node --test server/test/"
+    "test": "node --test --test-concurrency=1 server/test/"
   },
   "dependencies": {
     "@fastify/static": "^10.1.5",

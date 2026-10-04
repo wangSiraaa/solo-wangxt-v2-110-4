@@ -13,6 +13,7 @@
     <DashboardView v-else-if="tab === 'dash'" />
     <MappingsView v-else-if="tab === 'maps'" :refresh-key="refreshKey" @changed="bump" />
     <PlansView v-else-if="tab === 'plans'" :refresh-key="refreshKey" />
+    <ObservationsView v-else-if="tab === 'obs'" />
   </main>
 </template>
 
@@ -22,11 +23,13 @@ import RulesView from './views/RulesView.vue';
 import DashboardView from './views/DashboardView.vue';
 import MappingsView from './views/MappingsView.vue';
 import PlansView from './views/PlansView.vue';
+import ObservationsView from './views/ObservationsView.vue';
 
 const tabs = [
   { id: 'dash', label: '验证总览' },
   { id: 'maps', label: '映射与爬取证据' },
   { id: 'plans', label: '迁移方案 / 发布闸门' },
+  { id: 'obs', label: '观察包与覆盖' },
   { id: 'rules', label: '规范化规则' },
 ];
 const tab = ref('dash');

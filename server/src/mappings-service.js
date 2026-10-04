@@ -1,8 +1,10 @@
 /**
  * mapping_inputs（原始录入材料）-> url_mappings（生效映射）的重算。
  * 冲突键置 conflicted：不挑赢家、不静默覆盖。
+ * 重算后确保映射版本（mapping_versions）——覆盖报告按版本绑定复盘。
  */
 import { analyzeInputs } from './ambiguity.js';
+import { ensureMappingVersion } from './mapping-versions.js';
 
 export async function recomputeMappings(client) {
   const { rows } = await client.query('SELECT * FROM mapping_inputs ORDER BY id');
@@ -19,5 +21,7 @@ export async function recomputeMappings(client) {
        first.mapping_type, conflict.has(sourceNorm) ? 'conflicted' : 'active',
        first.note ?? null]);
   }
-  return { conflicted: conflict.size, total: groups.size };
+  // 映射集内容变化即产生新版本；内容未变则幂等复用最新版本
+  const { version, created } = await ensureMappingVersion(client, { note: '映射重算' });
+  return { conflicted: conflict.size, total: groups.size, versionNo: version.version_no, versionCreated: created };
 }

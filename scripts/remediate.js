@@ -11,6 +11,7 @@
 import { pool } from '../server/src/db.js';
 import { normalize } from '../server/src/normalize.js';
 import { recomputeMappings } from '../server/src/mappings-service.js';
+import { ensureMappingVersion } from '../server/src/mapping-versions.js';
 import { fixtureOrigin } from '../server/src/config.js';
 
 const O = fixtureOrigin();
@@ -48,6 +49,9 @@ try {
     [loopKey, `${O}/articles/tech/42`, loopTarget.normKey]);
   console.log('环修复：/loop/a 的映射目标更新为修复后的真实落点');
   console.log(`重算生效映射：${total} 条，冲突 ${conflicted} 条`);
+  // 直接 UPDATE 了 url_mappings，补记一个映射版本（内容未变则幂等跳过）
+  const { version, created } = await ensureMappingVersion(client, { note: '整改后映射版本' });
+  console.log(`映射版本：v${version.version_no}${created ? '（新建）' : '（复用）'}`);
   await client.query('COMMIT');
 } catch (e) {
   await client.query('ROLLBACK');

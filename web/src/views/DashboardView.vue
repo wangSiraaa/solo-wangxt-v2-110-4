@@ -22,6 +22,30 @@
     </div>
   </div>
 
+  <div class="panel" v-if="coverage">
+    <h2>真实访问覆盖风险（来自运营观察包，按当前映射版本与验证裁决）</h2>
+    <div class="kpi">
+      <div class="card"><div class="num" :style="uncoveredCount ? 'color:var(--bad)' : 'color:var(--ok)'">{{ uncoveredCount }}</div><div class="lbl">被访问但未覆盖的旧址（{{ uncoveredHits }} 次访问）</div></div>
+      <div class="card"><div class="num" :style="attentionCount ? 'color:var(--warn)' : ''">{{ attentionCount }}</div><div class="lbl">已映射但需注意（未验证/失败/歧义）</div></div>
+      <div class="card"><div class="num">{{ quarantinedCount }}</div><div class="lbl">隔离记录（外网/格式错误，绝不请求）</div></div>
+      <div class="card"><div class="num">{{ coverage.version ? 'v' + coverage.version.version_no : '—' }}</div><div class="lbl">当前映射版本</div></div>
+    </div>
+    <div v-if="topUncovered.length" class="callout bad" style="margin-top:10px">
+      <b>未覆盖热点（按访问次数排序，负责人需要决策是否补映射）：</b>
+      <table style="margin-top:6px">
+        <thead><tr><th>原始 URL（含追踪参数值）</th><th>观察时间段</th><th>次数</th></tr></thead>
+        <tbody>
+          <tr v-for="u in topUncovered" :key="u.event_id">
+            <td class="mono">{{ u.raw_url }}</td>
+            <td class="small">{{ fmt(u.observed_start) }}</td>
+            <td>{{ u.hits }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p v-else class="muted small" style="margin-top:8px">当前没有被真实访问却未覆盖的旧址。</p>
+  </div>
+
   <div class="panel">
     <h2>逐条裁决与证据</h2>
     <table>
@@ -85,6 +109,23 @@ const label = ref({});
 const running = ref(false);
 const hops = ref([]);
 const hopsKey = ref('');
+const coverage = ref(null);
+
+const uncoveredCount = computed(() => covCount('uncovered'));
+const uncoveredHits = computed(() =>
+  coverage.value?.summary?.by_coverage?.uncovered?.hits ?? 0);
+const quarantinedCount = computed(() => covCount('unverifiable'));
+const attentionCount = computed(() =>
+  covCount('covered_unverified') + covCount('covered_failing') +
+  covCount('gone_unverified') + covCount('gone_failing') + covCount('conflicted'));
+const topUncovered = computed(() =>
+  (coverage.value?.items ?? [])
+    .filter((i) => i.coverage === 'uncovered')
+    .sort((a, b) => b.hits - a.hits)
+    .slice(0, 5));
+function covCount(name) {
+  return coverage.value?.summary?.by_coverage?.[name]?.events ?? 0;
+}
 
 const counts = computed(() => {
   const c = { ok: 0, ambiguity: 0, loop: 0, long: 0, badStatus: 0, fetch: 0, unverified: 0 };
@@ -109,6 +150,7 @@ async function load() {
     if (!byKey.has(i.source_norm)) byKey.set(i.source_norm, i);
   }
   rows.value = [...byKey.values()];
+  try { coverage.value = await api.coverageCurrent(); } catch { coverage.value = null; }
 }
 async function runAll() {
   running.value = true;

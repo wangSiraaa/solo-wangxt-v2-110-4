@@ -1,8 +1,13 @@
-/** REST API：映射录入、规范化试算、验证、迁移方案与发布闸门。 */
+/** REST API：映射录入、规范化试算、验证、迁移方案与发布闸门、观察包与覆盖审阅。 */
 import { pool } from './db.js';
 import { normalize, carryTrackers, splitQuery } from './normalize.js';
 import { recomputeMappings } from './mappings-service.js';
 import { runVerification, VERDICT_LABEL } from './verify-runner.js';
+import { importBatch } from './observations-service.js';
+import {
+  computeCurrentCoverage, exportReport, reportItems, diffReportWithCurrent,
+} from './coverage-service.js';
+import { COVERAGE_LABEL } from './coverage-core.js';
 import { config } from './config.js';
 
 export default async function api(app) {
@@ -226,5 +231,88 @@ export default async function api(app) {
       `UPDATE migration_plans SET status='published', published_at=now()
         WHERE id=$1 RETURNING *`, [planId]);
     return { published: true, plan: rows[0] };
+  });
+
+  // ---- 观察包与覆盖审阅 -----------------------------------------------
+  // 纪律：本组接口只解析/读库，绝不发起 HTTP 请求；
+  // 外网与格式错误记录只标记隔离原因，验证器不会接触它们。
+
+  // 导入观察包（幂等：批次摘要 + 事件标识）
+  app.post('/api/observations/import', async (req) => {
+    const { batch_key, note, records } = req.body ?? {};
+    return importBatch({ batchKey: batch_key, note, records });
+  });
+
+  app.get('/api/observations/batches', async () => {
+    const { rows } = await pool.query(
+      `SELECT b.*, v.version_no AS mapping_version_no
+         FROM observation_batches b
+         LEFT JOIN mapping_versions v ON v.id = b.mapping_version_id
+        ORDER BY b.id DESC`);
+    return rows;
+  });
+
+  // 原始事件（证据可追溯）：?quarantined=true 只看隔离；?from=&to= 按观察时间段
+  app.get('/api/observations/events', async (req) => {
+    const params = [];
+    let where = 'WHERE true';
+    if (req.query.quarantined === 'true') where += ` AND e.origin_class <> 'local'`;
+    if (req.query.quarantined === 'false') where += ` AND e.origin_class = 'local'`;
+    if (req.query.from) { params.push(new Date(req.query.from)); where += ` AND e.observed_start >= $${params.length}`; }
+    if (req.query.to) { params.push(new Date(req.query.to)); where += ` AND e.observed_start <= $${params.length}`; }
+    const { rows } = await pool.query(
+      `SELECT e.*, b.batch_key
+         FROM observation_events e
+         JOIN observation_batches b ON b.id = e.batch_id
+         ${where} ORDER BY e.observed_start NULLS LAST, e.id`, params);
+    return rows;
+  });
+
+  // 当前覆盖（实时计算：当前映射版本 + 最新验证裁决）
+  app.get('/api/coverage/current', async (req) => {
+    const { from, to } = req.query ?? {};
+    return computeCurrentCoverage(pool, { from, to });
+  });
+
+  // 导出覆盖报告（不可变快照，绑定当前映射版本；差异随报告固化）
+  app.post('/api/coverage/reports', async (req) => {
+    const { from, to, note } = req.body ?? {};
+    return exportReport({ from, to, note });
+  });
+
+  app.get('/api/coverage/reports', async () => {
+    const { rows } = await pool.query(
+      `SELECT r.id, r.range_start, r.range_end, r.summary, r.note, r.created_at,
+              v.version_no, v.rules_fingerprint
+         FROM coverage_reports r
+         JOIN mapping_versions v ON v.id = r.mapping_version_id
+        ORDER BY r.id DESC`);
+    return rows;
+  });
+
+  app.get('/api/coverage/reports/:id', async (req, reply) => {
+    const { rows } = await pool.query(
+      `SELECT r.*, v.version_no, v.rules_fingerprint, v.snapshot
+         FROM coverage_reports r
+         JOIN mapping_versions v ON v.id = r.mapping_version_id
+        WHERE r.id=$1`, [req.params.id]);
+    if (!rows.length) return reply.code(404).send({ error: 'report not found' });
+    const items = await reportItems(pool, req.params.id);
+    return { report: rows[0], items, coverageLabel: COVERAGE_LABEL };
+  });
+
+  // 旧报告 vs 当前版本的实时差异（不改写任何数据）
+  app.get('/api/coverage/reports/:id/diff', async (req, reply) => {
+    const d = await diffReportWithCurrent(Number(req.params.id));
+    if (!d) return reply.code(404).send({ error: 'report not found' });
+    return d;
+  });
+
+  app.get('/api/mapping-versions', async () => {
+    const { rows } = await pool.query(
+      `SELECT id, version_no, rules_fingerprint, snapshot_hash, note, created_at,
+              jsonb_array_length(snapshot) AS mappings
+         FROM mapping_versions ORDER BY version_no DESC`);
+    return rows;
   });
 }

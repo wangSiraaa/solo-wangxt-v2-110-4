@@ -6,6 +6,8 @@ import { ensureDatabase, pool } from './db.js';
 import { normalize } from './normalize.js';
 import { analyzeInputs } from './ambiguity.js';
 import { fixtureOrigin } from './config.js';
+import { ensureMappingVersion } from './mapping-versions.js';
+import { importBatch } from './observations-service.js';
 
 const O = fixtureOrigin();
 
@@ -87,7 +89,7 @@ export async function seed() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('TRUNCATE migration_plan_items, migration_plans, verification_verdicts, crawl_results, url_mappings, mapping_inputs RESTART IDENTITY');
+    await client.query('TRUNCATE coverage_report_items, coverage_reports, observation_events, observation_batches, mapping_versions, migration_plan_items, migration_plans, verification_verdicts, crawl_results, url_mappings, mapping_inputs RESTART IDENTITY');
 
     for (const row of INPUTS) {
       const s = normalize(row.source_raw);
@@ -119,6 +121,8 @@ export async function seed() {
         ],
       );
     }
+    // 初始映射版本（覆盖报告按版本绑定）
+    await ensureMappingVersion(client, { note: 'seed 初始映射版本' });
     await client.query('COMMIT');
     console.log(`seeded ${INPUTS.length} inputs, ${ambiguous.length} ambiguous group(s)`);
   } catch (e) {
@@ -127,6 +131,23 @@ export async function seed() {
   } finally {
     client.release();
   }
+
+  // 演示观察包：正常旧址 / 410 栏目 / 不同 utm 值 / 未覆盖 / 外网 / 格式错误。
+  // 同一事件重传幂等，重复执行 seed 不会翻倍（批次摘要相同直接命中）。
+  const demo = await importBatch({
+    batchKey: 'ops-demo-2026-09',
+    note: '运营脱敏观察包（演示数据）',
+    records: [
+      { event_id: 'demo-001', url: `${O}/news/123?utm_source=weibo`, observed_start: '2026-09-21T08:00:00Z', observed_end: '2026-09-21T09:00:00Z', hits: 152, content_digest: 'sha256:demo001' },
+      { event_id: 'demo-002', url: `${O}/forum/announce/9`, observed_start: '2026-09-21T09:00:00Z', observed_end: '2026-09-21T10:00:00Z', hits: 12, content_digest: 'sha256:demo002' },
+      { event_id: 'demo-003', url: `${O}/%E9%A2%91%E9%81%93/%E7%A7%91%E6%8A%80/42.html?utm_source=weibo&utm_campaign=autumn`, observed_start: '2026-09-22T08:00:00Z', observed_end: '2026-09-22T09:00:00Z', hits: 88, content_digest: 'sha256:demo003' },
+      { event_id: 'demo-004', url: `${O}/%E9%A2%91%E9%81%93/%E7%A7%91%E6%8A%80/42.html?utm_source=newsletter`, observed_start: '2026-09-22T09:00:00Z', observed_end: '2026-09-22T10:00:00Z', hits: 41, content_digest: 'sha256:demo004' },
+      { event_id: 'demo-005', url: `${O}/legacy/promo-2024?utm_source=app`, observed_start: '2026-09-23T08:00:00Z', observed_end: '2026-09-23T09:00:00Z', hits: 310, content_digest: 'sha256:demo005' },
+      { event_id: 'demo-006', url: 'http://example.com/external-old?utm_source=partner', observed_start: '2026-09-23T09:00:00Z', observed_end: '2026-09-23T10:00:00Z', hits: 55, content_digest: 'sha256:demo006' },
+      { event_id: 'demo-007', url: 'not-a-valid-url', observed_start: '2026-09-23T10:00:00Z', observed_end: '2026-09-23T11:00:00Z', hits: 3, content_digest: 'sha256:demo007' },
+    ],
+  });
+  console.log(`demo observation batch: accepted=${demo.accepted} quarantined=${demo.quarantined}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

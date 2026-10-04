@@ -93,3 +93,86 @@ CREATE TABLE IF NOT EXISTS migration_plan_items (
   evidence        JSONB NOT NULL DEFAULT '{}'::jsonb,
   UNIQUE (plan_id, mapping_id)
 );
+
+-- ============ 观察包接入与覆盖审阅 ============
+
+-- 映射版本：映射集或规范化规则每次变化都产生一个不可变版本。
+-- 历史覆盖报告绑定版本（含全量快照），旧版本永远可复盘；当前版本继续演进。
+CREATE TABLE IF NOT EXISTS mapping_versions (
+  id                BIGSERIAL PRIMARY KEY,
+  version_no        INT  NOT NULL UNIQUE,
+  rules_fingerprint TEXT NOT NULL,        -- 规范化规则指纹（规则升级即变）
+  snapshot_hash     TEXT NOT NULL,        -- 规则指纹 + 映射集内容摘要
+  snapshot          JSONB NOT NULL,       -- 生效映射全量快照（复盘证据）
+  note              TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 观察包批次：同一 (batch_key, digest) 重传幂等；同 key 不同 digest 拒绝。
+CREATE TABLE IF NOT EXISTS observation_batches (
+  id                   BIGSERIAL PRIMARY KEY,
+  batch_key            TEXT NOT NULL,     -- 运营提供的稳定批次标识
+  digest               TEXT NOT NULL,     -- 批次内容摘要（canonical 记录 sha256）
+  record_count         INT  NOT NULL,
+  accepted_count       INT  NOT NULL DEFAULT 0,
+  duplicate_count      INT  NOT NULL DEFAULT 0,
+  quarantined_count    INT  NOT NULL DEFAULT 0,
+  conflict_count       INT  NOT NULL DEFAULT 0,
+  mapping_version_id   BIGINT REFERENCES mapping_versions(id),  -- 导入时的当前版本
+  note                 TEXT,
+  received_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (batch_key, digest)
+);
+
+-- 观察事件：原始记录即证据。raw_url 原样保存（原始路径、百分号编码、
+-- 追踪参数值），绝不因汇总而丢失；隔离记录同样保存并标注原因，
+-- 但绝不进入验证流程（外网/非法 origin 不会触发任何请求）。
+CREATE TABLE IF NOT EXISTS observation_events (
+  id                   BIGSERIAL PRIMARY KEY,
+  event_id             TEXT NOT NULL UNIQUE,  -- 稳定事件标识（幂等键）
+  batch_id             BIGINT NOT NULL REFERENCES observation_batches(id),
+  record_fingerprint   TEXT NOT NULL,         -- 单条内容指纹（同 id 不同内容=冲突）
+  raw_url              TEXT NOT NULL,         -- 原始 URL，原样保留
+  norm_key             TEXT,                  -- 导入时规则下的查表键（invalid 时为空）
+  rules_fingerprint    TEXT,                  -- 计算 norm_key 所用规则指纹
+  origin_class         TEXT NOT NULL CHECK (origin_class IN ('local','external','invalid')),
+  quarantine_reason    TEXT,                  -- 隔离原因；local 为 NULL
+  tracker_params       JSONB NOT NULL DEFAULT '{}'::jsonb,  -- 追踪参数名→值（原样）
+  observed_start       TIMESTAMPTZ,           -- 观察时间范围（隔离记录可空）
+  observed_end         TIMESTAMPTZ,
+  hits                 INT  NOT NULL DEFAULT 0,
+  content_digest       TEXT,                  -- 运营侧内容摘要
+  mapping_version_id   BIGINT REFERENCES mapping_versions(id),  -- 导入时版本
+  received_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_obs_events_norm ON observation_events(norm_key);
+CREATE INDEX IF NOT EXISTS idx_obs_events_observed ON observation_events(observed_start);
+CREATE INDEX IF NOT EXISTS idx_obs_events_batch ON observation_events(batch_id);
+
+-- 覆盖报告：导出即不可变快照，绑定映射版本。
+-- 后续导入（含迟到记录）、映射变更、规则升级都不改写它。
+CREATE TABLE IF NOT EXISTS coverage_reports (
+  id                 BIGSERIAL PRIMARY KEY,
+  mapping_version_id BIGINT NOT NULL REFERENCES mapping_versions(id),
+  range_start        TIMESTAMPTZ,
+  range_end          TIMESTAMPTZ,
+  summary            JSONB NOT NULL,   -- 计数汇总 + 与上一报告的差异（导出时固化）
+  note               TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS coverage_report_items (
+  id                BIGSERIAL PRIMARY KEY,
+  report_id         BIGINT NOT NULL REFERENCES coverage_reports(id) ON DELETE CASCADE,
+  event_id          TEXT NOT NULL,
+  raw_url           TEXT NOT NULL,     -- 原始 URL 快照（证据）
+  norm_key          TEXT,
+  rules_fingerprint TEXT,              -- 事件归一所用规则指纹（差异判定依据）
+  coverage          TEXT NOT NULL,     -- covered/uncovered/unverifiable/incomparable/...
+  verdict           TEXT,              -- 导出时的验证裁决
+  hits              INT  NOT NULL DEFAULT 0,
+  observed_start    TIMESTAMPTZ,
+  observed_end      TIMESTAMPTZ,
+  detail            JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_cover_items_report ON coverage_report_items(report_id);

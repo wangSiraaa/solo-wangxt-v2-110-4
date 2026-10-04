@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { ensureDatabase, pool } from './db.js';
 import { startFixture } from './fixture.js';
+import { ensureMappingVersion } from './mapping-versions.js';
 import apiRoutes from './routes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -19,6 +20,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 async function main() {
   const fixture = await startFixture();
   await ensureDatabase();
+  // 启动时确保当前映射集有对应版本（覆盖报告按版本绑定复盘）
+  await ensureMappingVersion(pool, { note: '服务启动时确保版本' });
 
   const app = Fastify({ logger: { name: 'workbench', level: 'info' } });
   await app.register(apiRoutes);

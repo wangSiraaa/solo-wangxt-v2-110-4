@@ -5,6 +5,23 @@
       “纳入方案”只是 pending；执行验证后，证据齐全且裁决通过才是 verified。
       发布闸门拒绝任何 blocked/pending、未纳入的生效映射或未裁决歧义。
     </p>
+    <div v-if="coverageRisk && (coverageRisk.uncovered || coverageRisk.attention)" class="callout bad">
+      <b>覆盖风险提示（来自运营观察包的真实访问）：</b>
+      <span v-if="coverageRisk.uncovered">
+        有 {{ coverageRisk.uncovered }} 个被真实访问的旧址当前无映射覆盖
+        （共 {{ coverageRisk.uncoveredHits }} 次访问）；
+      </span>
+      <span v-if="coverageRisk.attention">
+        {{ coverageRisk.attention }} 个已映射事件未验证/验证失败/存在歧义；
+      </span>
+      <span v-if="coverageRisk.quarantined">
+        另有 {{ coverageRisk.quarantined }} 条隔离记录（外网/格式错误，仅标记不请求）。
+      </span>
+      发布前请到「观察包与覆盖」确认这些真实流量已有归属。
+      <div v-if="coverageRisk.top?.length" class="small" style="margin-top:6px">
+        <div v-for="u in coverageRisk.top" :key="u.event_id" class="mono">· {{ u.raw_url }}（{{ u.hits }} 次）</div>
+      </div>
+    </div>
     <div class="row" style="align-items:flex-end">
       <label class="field" style="flex:3">
         <span>方案名称</span>
@@ -83,8 +100,26 @@ const plans = ref([]);
 const newName = ref('');
 const detail = ref(null);
 const lastPublish = ref(null);
+const coverageRisk = ref(null);
 
-async function load() { plans.value = await api.plans(); if (detail.value) await open(detail.value.plan.id); }
+async function load() {
+  plans.value = await api.plans();
+  if (detail.value) await open(detail.value.plan.id);
+  try {
+    const cov = await api.coverageCurrent();
+    const by = cov.summary?.by_coverage ?? {};
+    const ev = (n) => by[n]?.events ?? 0;
+    coverageRisk.value = {
+      uncovered: ev('uncovered'),
+      uncoveredHits: by.uncovered?.hits ?? 0,
+      attention: ev('covered_unverified') + ev('covered_failing') +
+        ev('gone_unverified') + ev('gone_failing') + ev('conflicted'),
+      quarantined: ev('unverifiable'),
+      top: (cov.items ?? []).filter((i) => i.coverage === 'uncovered')
+        .sort((a, b) => b.hits - a.hits).slice(0, 3),
+    };
+  } catch { coverageRisk.value = null; }
+}
 async function create() {
   if (!newName.value.trim()) return;
   await api.createPlan(newName.value.trim());

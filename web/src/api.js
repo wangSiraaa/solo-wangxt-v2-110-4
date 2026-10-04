@@ -1,6 +1,6 @@
 const j = async (r) => {
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(body.message || body.error || `HTTP ${r.status}`);
   return body;
 };
 
@@ -37,4 +37,24 @@ export const api = {
     fetch(`/api/plans/${id}/publish`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
     }).then(j),
+  // ---- 观察包与覆盖审阅 ----
+  importObservations: (payload) =>
+    fetch('/api/observations/import', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(j),
+  observationBatches: () => fetch('/api/observations/batches').then(j),
+  observationEvents: (params = {}) =>
+    fetch('/api/observations/events?' + new URLSearchParams(params)).then(j),
+  coverageCurrent: (params = {}) =>
+    fetch('/api/coverage/current?' + new URLSearchParams(params)).then(j),
+  exportCoverageReport: (payload) =>
+    fetch('/api/coverage/reports', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(j),
+  coverageReports: () => fetch('/api/coverage/reports').then(j),
+  coverageReport: (id) => fetch(`/api/coverage/reports/${id}`).then(j),
+  coverageReportDiff: (id) => fetch(`/api/coverage/reports/${id}/diff`).then(j),
+  mappingVersions: () => fetch('/api/mapping-versions').then(j),
 };
